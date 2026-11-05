@@ -158,9 +158,10 @@ export async function getOrganisationName(token: string): Promise<string> {
 
 // --- Bills and receipts, for filing their attachments in Drive. Read-only. ---
 
-// One page (up to 100) of bills (payable invoices) changed since `since`, newest change first.
+// One page (up to 100) of approved or paid bills (payable invoices) changed since `since`, newest change first.
 export async function listBillsPage(since: string, page: number, token: string): Promise<any[]> {
-  const where = encodeURIComponent('Type=="ACCPAY" AND Status=="PAID"');
+  // Approved (awaiting payment) and paid: the document is there from the day the bill is. Drafts and voided bills are not filed.
+  const where = encodeURIComponent('Type=="ACCPAY" AND (Status=="AUTHORISED" OR Status=="PAID")');
   const data = await xeroRequest("GET", `/Invoices?where=${where}&order=UpdatedDateUTC DESC&page=${page}`, token, undefined, { "If-Modified-Since": since });
   return data.Invoices ?? [];
 }

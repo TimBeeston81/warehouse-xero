@@ -3,7 +3,7 @@ import { isAuthorized } from "./lib/auth";
 import { getAccessToken, listAttachments, listBillsPage, listSpendPage } from "./lib/xero";
 import { listBillFiles } from "./lib/bill-files";
 
-// Called by WareHouse's daily filing of bills and receipts. Read-only: it lists the files attached to paid bills and to
+// Called by WareHouse's daily filing of bills and receipts. Read-only: it lists the files attached to approved or paid bills and to
 // reconciled "spend money" transactions changed since the time given, so WareHouse can put them in Drive. It writes nothing.
 // The scope names inside the access token (not secret: they are what the Xero app was allowed).
 function grantedScopes(token: string): string {
@@ -31,7 +31,7 @@ export default async (req: Request, _context: Context): Promise<Response> => {
     let files;
     try {
       files = await listBillFiles({
-        bills: (page) => step("Listing paid bills", () => listBillsPage(since, page, token)),
+        bills: (page) => step("Listing bills", () => listBillsPage(since, page, token)),
         spend: (page) => step("Listing spend-money transactions", () => listSpendPage(since, page, token)),
         attachments: (source, id) => step(`Listing the attachments of a ${source === "bill" ? "bill" : "spend-money transaction"}`, () => listAttachments(source === "bill" ? "Invoices" : "BankTransactions", id, token)),
       });
