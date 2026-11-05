@@ -25,12 +25,13 @@ export async function getAccessToken(): Promise<string> {
   return data.access_token;
 }
 
-async function xeroRequest(method: string, path: string, token: string, body?: unknown): Promise<any> {
+async function xeroRequest(method: string, path: string, token: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<any> {
   const response = await fetch(`${XERO_API_BASE}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
+      ...extraHeaders,
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -153,4 +154,34 @@ export async function getOrganisationName(token: string): Promise<string> {
     throw new Error(`Expected this Xero connection to belong to exactly one organisation, found ${Array.isArray(connections) ? connections.length : 0}.`);
   }
   return String(connections[0].tenantName ?? "");
+}
+
+// --- Bills and receipts, for filing their attachments in Drive. Read-only. ---
+
+// One page (up to 100) of bills (payable invoices) changed since `since`, newest change first.
+export async function listBillsPage(since: string, page: number, token: string): Promise<any[]> {
+  const where = encodeURIComponent('Type=="ACCPAY" AND Status=="PAID"');
+  const data = await xeroRequest("GET", `/Invoices?where=${where}&order=UpdatedDateUTC DESC&page=${page}`, token, undefined, { "If-Modified-Since": since });
+  return data.Invoices ?? [];
+}
+
+// One page of "spend money" transactions changed since `since`.
+export async function listSpendPage(since: string, page: number, token: string): Promise<any[]> {
+  const where = encodeURIComponent('Type=="SPEND" AND IsReconciled==true');
+  const data = await xeroRequest("GET", `/BankTransactions?where=${where}&order=UpdatedDateUTC DESC&page=${page}`, token, undefined, { "If-Modified-Since": since });
+  return data.BankTransactions ?? [];
+}
+
+export type AttachmentOwner = "Invoices" | "BankTransactions";
+
+export async function listAttachments(owner: AttachmentOwner, objectId: string, token: string): Promise<any[]> {
+  const data = await xeroRequest("GET", `/${owner}/${objectId}/Attachments`, token);
+  return data.Attachments ?? [];
+}
+
+// The file itself, as bytes. Xero answers with the file's own content type, not JSON.
+export async function downloadAttachment(owner: AttachmentOwner, objectId: string, attachmentId: string, token: string): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  const response = await fetch(`${XERO_API_BASE}/${owner}/${objectId}/Attachments/${attachmentId}`, { headers: { Authorization: `Bearer ${token}`, Accept: "*/*" } });
+  if (!response.ok) throw new Error(`Xero attachment download failed (${response.status})`);
+  return { bytes: await response.arrayBuffer(), contentType: response.headers.get("content-type") ?? "application/octet-stream" };
 }
