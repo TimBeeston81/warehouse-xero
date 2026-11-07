@@ -186,3 +186,35 @@ export async function downloadAttachment(owner: AttachmentOwner, objectId: strin
   if (!response.ok) throw new Error(`Xero attachment download failed (${response.status})`);
   return { bytes: await response.arrayBuffer(), contentType: response.headers.get("content-type") ?? "application/octet-stream" };
 }
+
+// --- Spend Money, for purchases approved in WareHouse. ---
+
+// Spend Money and bills dated in a window, to look for one already entered. Read-only.
+const dateTime = (day: string) => `DateTime(${day.replace(/-/g, ",")})`;
+
+export async function listSpendBetween(from: string, to: string, token: string): Promise<any[]> {
+  const where = encodeURIComponent(`Type=="SPEND" AND Date>=${dateTime(from)} AND Date<=${dateTime(to)}`);
+  const data = await xeroRequest("GET", `/BankTransactions?where=${where}`, token);
+  return data.BankTransactions ?? [];
+}
+
+export async function listBillsBetween(from: string, to: string, token: string): Promise<any[]> {
+  const where = encodeURIComponent(`Type=="ACCPAY" AND Status!="VOIDED" AND Status!="DELETED" AND Date>=${dateTime(from)} AND Date<=${dateTime(to)}`);
+  const data = await xeroRequest("GET", `/Invoices?where=${where}`, token);
+  return data.Invoices ?? [];
+}
+
+// The key means a retry after a lost reply returns the same entry instead of making a second one.
+export async function createSpendMoney(payload: Record<string, unknown>, idempotencyKey: string, token: string): Promise<any> {
+  const data = await xeroRequest("POST", "/BankTransactions", token, { BankTransactions: [payload] }, { "Idempotency-Key": idempotencyKey });
+  return data.BankTransactions?.[0];
+}
+
+export async function attachToSpendMoney(id: string, fileName: string, contentType: string, bytes: ArrayBuffer, token: string): Promise<void> {
+  const response = await fetch(`${XERO_API_BASE}/BankTransactions/${id}/Attachments/${encodeURIComponent(fileName)}`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "Content-Type": contentType },
+    body: bytes,
+  });
+  if (!response.ok) throw new Error(`Xero wouldn't take the attachment (${response.status}): ${(await response.text()).slice(0, 200)}`);
+}
