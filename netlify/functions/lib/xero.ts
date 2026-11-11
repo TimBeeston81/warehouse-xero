@@ -218,3 +218,60 @@ export async function attachToSpendMoney(id: string, fileName: string, contentTy
   });
   if (!response.ok) throw new Error(`Xero wouldn't take the attachment (${response.status}): ${(await response.text()).slice(0, 200)}`);
 }
+
+// --- Billable expenses (the 640 clearing account). See lib/clearing.ts. ---
+
+// One page of every bank transaction (spent and received), with its lines.
+export async function listBankTransactionsPage(page: number, token: string): Promise<any[]> {
+  const data = await xeroRequest("GET", `/BankTransactions?page=${page}`, token);
+  return data.BankTransactions ?? [];
+}
+
+// One page of every bill (payable invoice), with its lines.
+export async function listAllBillsPage(page: number, token: string): Promise<any[]> {
+  const where = encodeURIComponent('Type=="ACCPAY"');
+  const data = await xeroRequest("GET", `/Invoices?where=${where}&page=${page}`, token);
+  return data.Invoices ?? [];
+}
+
+// One page of billable expenses: costs assigned to a customer with "Assign expenses to a customer".
+export async function listLinkedTransactionsPage(page: number, token: string): Promise<any[]> {
+  const data = await xeroRequest("GET", `/LinkedTransactions?page=${page}`, token);
+  return data.LinkedTransactions ?? [];
+}
+
+export async function linkedTransactionsForSource(sourceTransactionId: string, token: string): Promise<any[]> {
+  const data = await xeroRequest("GET", `/LinkedTransactions?SourceTransactionID=${encodeURIComponent(sourceTransactionId)}`, token);
+  return data.LinkedTransactions ?? [];
+}
+
+// Names for a set of contact ids, 50 at a time.
+export async function contactNames(ids: string[], token: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (let i = 0; i < ids.length; i += 50) {
+    const data = await xeroRequest("GET", `/Contacts?IDs=${ids.slice(i, i + 50).map(encodeURIComponent).join(",")}&summaryOnly=true`, token);
+    for (const c of data.Contacts ?? []) out[String(c.ContactID)] = String(c.Name ?? "");
+  }
+  return out;
+}
+
+// A cost's line as Xero holds it now: a Spend Money entry or a bill. Null if it is gone.
+export async function findSourceLine(transactionId: string, lineItemId: string, token: string): Promise<{ accountCode: string; spend: boolean } | null> {
+  const asBank = await xeroRequest("GET", `/BankTransactions/${transactionId}`, token).catch((err: Error) => (/\(404\)/.test(err.message) ? null : Promise.reject(err)));
+  const bank = asBank?.BankTransactions?.[0];
+  if (bank) {
+    const line = (bank.LineItems ?? []).find((l: any) => l.LineItemID === lineItemId);
+    return line && bank.Status !== "DELETED" ? { accountCode: String(line.AccountCode ?? ""), spend: bank.Type === "SPEND" } : null;
+  }
+  const asBill = await xeroRequest("GET", `/Invoices/${transactionId}`, token).catch((err: Error) => (/\(404\)/.test(err.message) ? null : Promise.reject(err)));
+  const bill = asBill?.Invoices?.[0];
+  if (!bill || bill.Type !== "ACCPAY" || ["DELETED", "VOIDED"].includes(bill.Status)) return null;
+  const line = (bill.LineItems ?? []).find((l: any) => l.LineItemID === lineItemId);
+  return line ? { accountCode: String(line.AccountCode ?? ""), spend: true } : null;
+}
+
+// "Assign expenses to a customer": links one cost line to a customer, ready to add to their next invoice.
+export async function createLinkedTransaction(req: { sourceTransactionId: string; sourceLineItemId: string; contactId: string }, token: string): Promise<any> {
+  const data = await xeroRequest("PUT", "/LinkedTransactions", token, { SourceTransactionID: req.sourceTransactionId, SourceLineItemID: req.sourceLineItemId, ContactID: req.contactId });
+  return data.LinkedTransactions?.[0] ?? data;
+}
