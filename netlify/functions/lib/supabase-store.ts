@@ -46,7 +46,7 @@ export function createSupabaseStore(url: string, key: string, db: SupabaseClient
       if (!data) return null;
       const { data: lines, error: lineError } = await db
         .from("invoice_lines")
-        .select("id, description, quantity, unit_pence, position")
+        .select("id, description, quantity, unit_pence, position, account_code, recharge_source_transaction_id, recharge_source_line_id, recharge_link_id")
         .eq("invoice_id", invoiceId)
         .order("position");
       if (lineError) fail("line lookup", lineError);

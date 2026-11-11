@@ -56,6 +56,9 @@ export class FakeXero implements XeroApi {
   payments: any[] = [];
   contacts: any[] = [];
   failOn: Record<string, string> = {};
+  // Billable-expense links as Xero holds them, by id; `linked` records each one pointed at an invoice line.
+  links = new Map<string, any>();
+  linked: any[] = [];
   private n = 0;
 
   private maybeFail(name: string) { if (this.failOn[name]) throw new Error(this.failOn[name]); }
@@ -78,6 +81,8 @@ export class FakeXero implements XeroApi {
     inv.AmountPaid = (inv.AmountPaid ?? 0) + p.amount; inv.AmountDue = inv.Total - inv.AmountPaid; if (inv.AmountDue <= 0) inv.Status = "PAID";
     return { PaymentID: `${this.prefix}pay-${this.payments.length}` };
   }
+  async getLinkedTransaction(id: string) { this.calls.push("getLink"); this.maybeFail("getLink"); return this.links.get(id) ?? null; }
+  async linkExpenseToInvoice(p: any) { this.calls.push("link"); this.maybeFail("link"); this.linked.push(p); }
   async getOnlineInvoiceUrl(id: string) { this.calls.push("url"); this.maybeFail("url"); return `https://in.xero.test/${id}`; }
   async findContactByName() { this.calls.push("findContact"); return this.existingContact; }
   async createContact(payload: any) { this.calls.push("createContact"); this.contacts.push(payload); return { ContactID: "xc-new" }; }

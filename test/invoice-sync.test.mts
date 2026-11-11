@@ -185,3 +185,53 @@ test("webhook: updates paid and balance for known authorised invoices, ignores t
   await applyWebhookEvent(deps(store, xero), { eventCategory: "INVOICE", resourceId: "xi-1" }, "tok");
   assert.equal(store.webhook, null, "draft edits are noise");
 });
+
+const recharge = (n: number, over: Record<string, unknown> = {}) => ({
+  id: `r${n}`, description: `Make.com\n- Therapy & Education\n- 2${n}/7/2026`, quantity: 1, unit_pence: 793 + n, position: n, account_code: "640",
+  recharge_source_transaction_id: `src-${n}`, recharge_source_line_id: `srcline-${n}`, recharge_link_id: `link-${n}`, ...over,
+});
+
+test("a recharge line is coded to its own account and its cost is marked billed on the new invoice line", async () => {
+  const store = new FakeStore({ lines: [{ id: "l1", description: "Build", quantity: 1, unit_pence: 10000, position: 0 }, recharge(1), recharge(2)] }, { xero_contact_id: "xc-1" });
+  const xero = new FakeXero();
+  xero.links.set("link-1", { LinkedTransactionID: "link-1", SourceLineItemID: "srcline-1", Status: "APPROVED" });
+  xero.links.set("link-2", { LinkedTransactionID: "link-2", SourceLineItemID: "srcline-2", Status: "APPROVED" });
+  const r = await syncInvoice(deps(store, xero), "inv-1");
+  assert.deepEqual([r.ok, (r as { warnings?: string[] }).warnings], [true, undefined]);
+  assert.deepEqual(xero.upserts[0].LineItems.map((l: any) => l.AccountCode), ["200", "640", "640"], "only recharge lines leave the usual account");
+  const id = (r as { xeroInvoiceId: string }).xeroInvoiceId;
+  assert.deepEqual(xero.linked.map((l) => [l.linkId, l.sourceTransactionId, l.sourceLineItemId, l.contactId, l.invoiceId, l.lineItemId]), [
+    ["link-1", "src-1", "srcline-1", "xc-1", id, `xl-${id}-1`],
+    ["link-2", "src-2", "srcline-2", "xc-1", id, `xl-${id}-2`],
+  ]);
+});
+
+test("a cost that can't be linked is reported and logged, and the invoice still stands", async () => {
+  const store = new FakeStore({ lines: [recharge(1), recharge(2), recharge(3), recharge(4)] }, { xero_contact_id: "xc-1" });
+  const xero = new FakeXero();
+  xero.links.set("link-1", { SourceLineItemID: "srcline-1", Status: "BILLED", TargetTransactionID: "some-other-invoice" });
+  xero.links.set("link-2", { SourceLineItemID: "wrong-line", Status: "APPROVED" });
+  // link-3 is gone from Xero; link-4 is fine
+  xero.links.set("link-4", { SourceLineItemID: "srcline-4", Status: "APPROVED" });
+  const r = await syncInvoice(deps(store, xero), "inv-1");
+  assert.equal(r.ok, true);
+  const warnings = (r as { warnings: string[] }).warnings;
+  assert.equal(warnings.length, 3);
+  assert.match(warnings[0], /already shows it as billed on another invoice/);
+  assert.match(warnings[1], /different cost/);
+  assert.match(warnings[2], /no longer has/);
+  assert.deepEqual(xero.linked.map((l) => l.linkId), ["link-4"]);
+  assert.equal(store.status, "Synced");
+  assert.equal(store.logs.filter((l) => l.outcome === "failure").length, 3);
+  assert.equal(store.logs.filter((l) => l.outcome === "success").length, 1);
+});
+
+test("a failing link check never costs the invoice", async () => {
+  const store = new FakeStore({ lines: [recharge(1)] }, { xero_contact_id: "xc-1" });
+  const xero = new FakeXero();
+  xero.failOn.getLink = "Xero API error (500)";
+  const r = await syncInvoice(deps(store, xero), "inv-1");
+  assert.equal(r.ok, true);
+  assert.match((r as { warnings: string[] }).warnings[0], /500/);
+  assert.equal(store.invoice.xero_invoice_id !== null, true);
+});

@@ -6,7 +6,7 @@
 // the invoice, and an authorised invoice is never edited.
 
 import { checkPairing } from "./environment";
-import type { InvoiceStore, StoredOrganisation, XeroInvoiceFacts } from "./invoice-store";
+import type { InvoiceStore, StoredLine, StoredOrganisation, XeroInvoiceFacts } from "./invoice-store";
 
 export interface XeroApi {
   getAccessToken(): Promise<string>;
@@ -18,6 +18,8 @@ export interface XeroApi {
   findContactByName(name: string, token: string): Promise<any>;
   createContact(payload: Record<string, unknown>, token: string): Promise<any>;
   parseXeroDate(value: string | undefined | null): string | undefined;
+  getLinkedTransaction(linkId: string, token: string): Promise<any | null>;
+  linkExpenseToInvoice(p: { linkId: string; sourceTransactionId: string; sourceLineItemId: string; contactId: string; invoiceId: string; lineItemId: string }, token: string): Promise<void>;
 }
 
 export interface Deps {
@@ -27,7 +29,8 @@ export interface Deps {
   now?: () => Date;
 }
 
-export type Result = { ok: true; xeroInvoiceId?: string; status?: string } | { ok: false; error: string };
+// `warnings`: the invoice is in Xero, but something after it (linking a recharge to its cost) didn't work.
+export type Result = { ok: true; xeroInvoiceId?: string; status?: string; warnings?: string[] } | { ok: false; error: string };
 
 const SYNC = "sync-invoice-to-xero";
 const VOID = "void-invoice-in-xero";
@@ -126,7 +129,8 @@ export async function syncInvoice(deps: Deps, invoiceId: string): Promise<Result
       Description: l.description || "",
       Quantity: Number(l.quantity),
       UnitAmount: pounds(l.unit_pence),
-      AccountCode: accountCode,
+      // A recharge line is coded to the clearing account; every other line to the usual sales account.
+      AccountCode: l.account_code || accountCode,
     }));
 
     const payment = invoice.xero_payment_id ? null : (invoice.stripe_amount_paid_pence ?? 0) > 0
@@ -177,11 +181,43 @@ export async function syncInvoice(deps: Deps, invoiceId: string): Promise<Result
     await store.saveSynced(invoiceId, facts, lines.map((_, i) => xeroLines[i]?.LineItemID));
     await store.log(invoiceId, "success", `Invoice synced to Xero (${facts.number || facts.xeroInvoiceId})`, SYNC);
 
+    const warnings = await linkRecharges(deps, invoiceId, lines, xeroLines, xeroInvoice.InvoiceID, contactId, token);
+
     if (payment) await tryRecordPayment(deps, invoiceId, xeroInvoice.InvoiceID, payment, token, now);
-    return { ok: true, xeroInvoiceId: xeroInvoice.InvoiceID, status: xeroInvoice.Status };
+    return { ok: true, xeroInvoiceId: xeroInvoice.InvoiceID, status: xeroInvoice.Status, ...(warnings.length ? { warnings } : {}) };
   } catch (err) {
     return fail(deps, invoiceId, message(err), SYNC);
   }
+}
+
+// Recharges: each line that bills a cost on the clearing account has its billable-expense link pointed at the new invoice
+// line, which is what makes Xero mark the cost Billed. Never throws and never undoes the sync: a failure is logged on the
+// invoice and returned as a warning, and the cost stays "to invoice" until it is sorted out in Xero.
+async function linkRecharges(deps: Deps, invoiceId: string, lines: StoredLine[], xeroLines: any[], xeroInvoiceId: string, contactId: string, token: string): Promise<string[]> {
+  const warnings: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (!l.recharge_link_id || !l.recharge_source_transaction_id || !l.recharge_source_line_id) continue;
+    const what = (l.description || "A recharge").split("\n")[0];
+    try {
+      const target = xeroLines[i]?.LineItemID;
+      if (!target) throw new Error("Xero didn’t give back the invoice line.");
+      const current = await deps.xero.getLinkedTransaction(l.recharge_link_id, token);
+      if (!current) throw new Error("Xero no longer has the cost’s assignment to this client.");
+      if (current.SourceLineItemID !== l.recharge_source_line_id) throw new Error("The assignment in Xero is for a different cost.");
+      if (current.Status === "BILLED" && current.TargetTransactionID && current.TargetTransactionID !== xeroInvoiceId) throw new Error("Xero already shows it as billed on another invoice.");
+      await deps.xero.linkExpenseToInvoice({ linkId: l.recharge_link_id, sourceTransactionId: l.recharge_source_transaction_id, sourceLineItemId: l.recharge_source_line_id, contactId, invoiceId: xeroInvoiceId, lineItemId: target }, token);
+    } catch (err) {
+      const text = `${what}: not marked as billed in Xero. ${message(err)}`;
+      warnings.push(text);
+      try {
+        await deps.store.log(invoiceId, "failure", `Recharge ${text}`, SYNC);
+      } catch (writeErr) {
+        console.error("Failed to log the recharge link problem:", writeErr);
+      }
+    }
+  }
+  return warnings;
 }
 
 // Never throws: a payment problem is reported on the invoice but must not undo the sync.

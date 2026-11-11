@@ -280,3 +280,30 @@ export async function createLinkedTransaction(req: { sourceTransactionId: string
 export async function deleteLinkedTransaction(linkId: string, token: string): Promise<void> {
   await xeroRequest("DELETE", `/LinkedTransactions/${encodeURIComponent(linkId)}`, token);
 }
+
+// One billable-expense link, as Xero holds it now.
+export async function getLinkedTransaction(linkId: string, token: string): Promise<any | null> {
+  try {
+    const data = await xeroRequest("GET", `/LinkedTransactions/${encodeURIComponent(linkId)}`, token);
+    return data.LinkedTransactions?.[0] ?? null;
+  } catch (err) {
+    if (/\(404\)/.test((err as Error).message)) return null;
+    throw err;
+  }
+}
+
+// What "Add billable expenses" does on an invoice: points the cost's link at the invoice line that bills it, so Xero
+// marks the cost Billed.
+export async function linkExpenseToInvoice(
+  p: { linkId: string; sourceTransactionId: string; sourceLineItemId: string; contactId: string; invoiceId: string; lineItemId: string },
+  token: string,
+): Promise<void> {
+  await xeroRequest("POST", `/LinkedTransactions/${encodeURIComponent(p.linkId)}`, token, {
+    LinkedTransactionID: p.linkId,
+    SourceTransactionID: p.sourceTransactionId,
+    SourceLineItemID: p.sourceLineItemId,
+    ContactID: p.contactId,
+    TargetTransactionID: p.invoiceId,
+    TargetLineItemID: p.lineItemId,
+  });
+}

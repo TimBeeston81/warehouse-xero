@@ -8,6 +8,12 @@ export interface StoredLine {
   quantity: number;
   unit_pence: number;
   position: number;
+  // Blank: the usual sales account. A recharge line is coded to the clearing account (640).
+  account_code?: string | null;
+  // A recharge: the cost on the clearing account this line bills, and Xero's billable-expense link for it.
+  recharge_source_transaction_id?: string | null;
+  recharge_source_line_id?: string | null;
+  recharge_link_id?: string | null;
 }
 
 export interface StoredInvoice {
