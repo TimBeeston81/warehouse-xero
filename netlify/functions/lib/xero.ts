@@ -275,3 +275,8 @@ export async function createLinkedTransaction(req: { sourceTransactionId: string
   const data = await xeroRequest("PUT", "/LinkedTransactions", token, { SourceTransactionID: req.sourceTransactionId, SourceLineItemID: req.sourceLineItemId, ContactID: req.contactId });
   return data.LinkedTransactions?.[0] ?? data;
 }
+
+// Undo "Assign expenses to a customer" for one cost line.
+export async function deleteLinkedTransaction(linkId: string, token: string): Promise<void> {
+  await xeroRequest("DELETE", `/LinkedTransactions/${encodeURIComponent(linkId)}`, token);
+}

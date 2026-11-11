@@ -239,3 +239,40 @@ export async function assignExpense(deps: AssignDeps, req: AssignRequest, checkP
     return { ok: false, error: (err as Error).message.slice(0, 400) };
   }
 }
+
+// --- Undoing an assignment: removes the link, as unassigning in Xero does. Only while it is still waiting to be
+// invoiced (APPROVED): once it is on an invoice, taking it off is done on the invoice. ---
+
+export interface UnassignRequest {
+  sourceTransactionId: string;
+  sourceLineItemId: string;
+  linkId: string;
+}
+
+export function parseUnassignRequest(body: any): UnassignRequest | null {
+  const req = { sourceTransactionId: text(body?.sourceTransactionId), sourceLineItemId: text(body?.sourceLineItemId), linkId: text(body?.linkId) };
+  return UUID.test(req.sourceTransactionId) && UUID.test(req.sourceLineItemId) && UUID.test(req.linkId) ? req : null;
+}
+
+export interface UnassignDeps {
+  env(name: string): string | undefined;
+  getAccessToken(): Promise<string>;
+  getOrganisationName(token: string): Promise<string>;
+  linksForSource(transactionId: string, token: string): Promise<any[]>;
+  deleteLink(linkId: string, token: string): Promise<void>;
+}
+
+export async function unassignExpense(deps: UnassignDeps, req: UnassignRequest, checkPairing: (supabaseUrl: string | undefined, orgName: string) => string | null): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const token = await deps.getAccessToken();
+    const pairing = checkPairing(deps.env("SUPABASE_URL"), await deps.getOrganisationName(token));
+    if (pairing) return { ok: false, error: pairing };
+    const link = (await deps.linksForSource(req.sourceTransactionId, token)).find((l) => text(l.LinkedTransactionID) === req.linkId);
+    if (!link || text(link.SourceLineItemID) !== req.sourceLineItemId || text(link.Status) === "VOIDED") return { ok: false, error: "Xero no longer has that assignment. Refresh the page." };
+    if (text(link.Status) !== "APPROVED") return { ok: false, error: "It’s on an invoice now, so it can’t be unassigned here. Take it off the invoice in Xero." };
+    await deps.deleteLink(req.linkId, token);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message.slice(0, 400) };
+  }
+}

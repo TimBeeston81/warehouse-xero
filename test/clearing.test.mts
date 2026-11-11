@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assignExpense, parseAssignRequest, readClearing, summariseClearing, type AssignDeps } from "../netlify/functions/lib/clearing";
+import { assignExpense, parseAssignRequest, parseUnassignRequest, readClearing, summariseClearing, unassignExpense, type AssignDeps, type UnassignDeps } from "../netlify/functions/lib/clearing";
 
 const ID = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
@@ -118,4 +118,39 @@ test("assigning refuses a recoded line, a refund, a line already assigned, and t
 test("a voided link on the same line doesn't block assigning again", async () => {
   const deps = assignDeps({ linksForSource: async () => [{ SourceLineItemID: ID(1001), Status: "VOIDED" }] });
   assert.equal((await assignExpense(deps, req, pairOk)).ok, true);
+});
+
+
+function unassignDeps(links: any[]): UnassignDeps & { deleted: string[] } {
+  const deleted: string[] = [];
+  return {
+    deleted,
+    env: () => "https://ldfusqzcrcidkqpgqpep.supabase.co",
+    getAccessToken: async () => "token",
+    getOrganisationName: async () => "Timothy Beeston",
+    linksForSource: async () => links,
+    deleteLink: async (id) => void deleted.push(id),
+  };
+}
+const undo = { sourceTransactionId: ID(1), sourceLineItemId: ID(1001), linkId: ID(77) };
+
+test("undo removes the link while the cost is still waiting to be invoiced", async () => {
+  const deps = unassignDeps([{ LinkedTransactionID: ID(77), SourceLineItemID: ID(1001), Status: "APPROVED" }]);
+  assert.deepEqual(await unassignExpense(deps, undo, () => null), { ok: true });
+  assert.deepEqual(deps.deleted, [ID(77)]);
+});
+
+test("undo refuses a cost already on an invoice, a link that isn't this line's, and the wrong pairing", async () => {
+  for (const [links, pairing, why] of [
+    [[{ LinkedTransactionID: ID(77), SourceLineItemID: ID(1001), Status: "BILLED" }], () => null, /on an invoice now/],
+    [[{ LinkedTransactionID: ID(77), SourceLineItemID: ID(1999), Status: "APPROVED" }], () => null, /no longer has/],
+    [[], () => null, /no longer has/],
+    [[{ LinkedTransactionID: ID(77), SourceLineItemID: ID(1001), Status: "APPROVED" }], () => "Refusing.", /Refusing/],
+  ] as const) {
+    const deps = unassignDeps(links as any[]);
+    const result = await unassignExpense(deps, undo, pairing as () => string | null);
+    assert.match((result as { error: string }).error, why);
+    assert.equal(deps.deleted.length, 0);
+  }
+  assert.equal(parseUnassignRequest({ ...undo, linkId: "" }), null);
 });
