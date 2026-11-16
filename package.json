@@ -2,7 +2,7 @@
   "name": "warehouse-xero",
   "version": "1.0.0",
   "private": true,
-  "description": "WareHouse to Xero (invoices, payments, task status), running as Netlify Functions. Deployed to the Netlify project airtable-xero-sync.",
+  "description": "WareHouse to Xero (invoices, payments, task status), running as Netlify Functions. Deployed to the Netlify project warehouse-xero.",
   "engines": {
     "node": ">=18"
   },
