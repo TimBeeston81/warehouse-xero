@@ -120,6 +120,13 @@ export async function listSalesInvoicesPage(page: number, token: string): Promis
   return data.Invoices ?? [];
 }
 
+// One page (up to 100) of the active contacts, names only (summaryOnly leaves out addresses and the rest). Read-only.
+export async function listActiveContactsPage(page: number, token: string): Promise<any[]> {
+  const where = encodeURIComponent('ContactStatus=="ACTIVE"');
+  const data = await xeroRequest("GET", `/Contacts?where=${where}&summaryOnly=true&order=Name&page=${page}`, token);
+  return data.Contacts ?? [];
+}
+
 // The customer-facing "pay online" link. Separate endpoint, not part of the Invoice object itself.
 export async function getOnlineInvoiceUrl(invoiceId: string, token: string): Promise<string | undefined> {
   const data = await xeroRequest("GET", `/Invoices/${invoiceId}/OnlineInvoice`, token);
